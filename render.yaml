@@ -21,7 +21,7 @@ services:
     name: fleetos-healer
     runtime: docker
     dockerfilePath: ./scheduler-service/Dockerfile
-    startCommand: python healer.py
+    dockerCommand: python healer.py
     envVars:
       - key: REDIS_URL
         sync: false
