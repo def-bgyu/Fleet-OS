@@ -19,6 +19,15 @@ SCHEDULER_INTERVAL = 5  # seconds — how often scheduler checks the queue
 # --- FastAPI App ---
 app = FastAPI(title="CityFleet Scheduler")
 
+from fastapi.middleware.cors import CORSMiddleware
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 # --- Redis Connection ---
 r = redis.from_url(REDIS_URL, decode_responses=True)
 
@@ -155,7 +164,7 @@ def scheduler_loop():
 
             # Simulate job completion after 5 seconds
             def complete_job(j):
-                time.sleep(5)
+                time.sleep(20)
                 j["status"] = "completed"
                 j["completed_at"] = time.time()
                 save_job(j)

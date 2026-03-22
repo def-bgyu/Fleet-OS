@@ -78,7 +78,8 @@ def heartbeat_loop():
 # --- Main ---
 if __name__ == "__main__":
     # Start prometheus metrics server on port 9100
-    start_http_server(9100)
+    METRICS_PORT = int(os.environ.get("METRICS_PORT", "9100"))
+    start_http_server(METRICS_PORT)
     print(f"[{NODE_ID}] Starting up...")
     
     # Register with registry

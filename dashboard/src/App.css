@@ -1,0 +1,12 @@
+@keyframes pulse {
+  0% { opacity: 1; box-shadow: 0 0 4px currentColor; }
+  50% { opacity: 0.5; box-shadow: none; }
+  100% { opacity: 1; box-shadow: 0 0 4px currentColor; }
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; padding: 0; }
+
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: #0c0c0f; }
+::-webkit-scrollbar-thumb { background: #1f1f2e; border-radius: 4px; }

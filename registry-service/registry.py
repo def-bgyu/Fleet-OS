@@ -14,7 +14,16 @@ DEAD_NODE_THRESHOLD = 30  # seconds — if no heartbeat in 30s, node is dead
 HEALTH_CHECK_INTERVAL = 15  # seconds — how often we scan for dead nodes
 
 # --- FastAPI App ---
-app = FastAPI(title="CityFleet Registry")
+app = FastAPI(title="FleetOS Registry")
+
+from fastapi.middleware.cors import CORSMiddleware
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # --- Redis Connection ---
 r = redis.from_url(REDIS_URL, decode_responses=True)
