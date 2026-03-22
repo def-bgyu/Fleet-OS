@@ -1,0 +1,103 @@
+services:
+  - type: web
+    name: fleetos-registry
+    runtime: docker
+    dockerfilePath: ./registry-service/Dockerfile
+    envVars:
+      - key: REDIS_URL
+        sync: false
+
+  - type: web
+    name: fleetos-scheduler
+    runtime: docker
+    dockerfilePath: ./scheduler-service/Dockerfile
+    envVars:
+      - key: REDIS_URL
+        sync: false
+      - key: REGISTRY_URL
+        sync: false
+
+  - type: worker
+    name: fleetos-healer
+    runtime: docker
+    dockerfilePath: ./scheduler-service/Dockerfile
+    startCommand: python healer.py
+    envVars:
+      - key: REDIS_URL
+        sync: false
+      - key: REGISTRY_URL
+        sync: false
+      - key: SCHEDULER_URL
+        sync: false
+
+  - type: worker
+    name: fleetos-node-001
+    runtime: docker
+    dockerfilePath: ./node-agent/Dockerfile
+    envVars:
+      - key: NODE_ID
+        value: node-001
+      - key: REGISTRY_URL
+        sync: false
+      - key: METRICS_PORT
+        value: 9100
+
+  - type: worker
+    name: fleetos-node-002
+    runtime: docker
+    dockerfilePath: ./node-agent/Dockerfile
+    envVars:
+      - key: NODE_ID
+        value: node-002
+      - key: REGISTRY_URL
+        sync: false
+      - key: METRICS_PORT
+        value: 9100
+
+  - type: worker
+    name: fleetos-node-003
+    runtime: docker
+    dockerfilePath: ./node-agent/Dockerfile
+    envVars:
+      - key: NODE_ID
+        value: node-003
+      - key: REGISTRY_URL
+        sync: false
+      - key: METRICS_PORT
+        value: 9100
+
+  - type: worker
+    name: fleetos-node-004
+    runtime: docker
+    dockerfilePath: ./node-agent/Dockerfile
+    envVars:
+      - key: NODE_ID
+        value: node-004
+      - key: REGISTRY_URL
+        sync: false
+      - key: METRICS_PORT
+        value: 9100
+
+  - type: worker
+    name: fleetos-node-005
+    runtime: docker
+    dockerfilePath: ./node-agent/Dockerfile
+    envVars:
+      - key: NODE_ID
+        value: node-005
+      - key: REGISTRY_URL
+        sync: false
+      - key: METRICS_PORT
+        value: 9100
+
+  - type: worker
+    name: fleetos-node-006
+    runtime: docker
+    dockerfilePath: ./node-agent/Dockerfile
+    envVars:
+      - key: NODE_ID
+        value: node-006
+      - key: REGISTRY_URL
+        sync: false
+      - key: METRICS_PORT
+        value: 9100
