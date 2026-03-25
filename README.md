@@ -1,48 +1,104 @@
-# FleetOS 🚀
+# ⚡ FleetOS
 
-**A distributed AI inference node fleet management platform** — orchestrating nodes, scheduling jobs, healing itself, and giving you full observability in real time.
-
----
-
-## Overview
-
-FleetOS is a self-managing platform built to orchestrate a fleet of AI inference nodes. It handles everything from node registration and health monitoring to job scheduling, failure recovery, and live dashboarding — with zero human intervention required.
+**A distributed AI inference node fleet management platform — self-registering, self-healing, and self-scaling.**
 
 ---
 
-## Features
+## What is FleetOS?
 
-- **Zero-Touch Node Registration** — Nodes self-register on startup and emit heartbeats every few seconds. Failures are detected within 30 seconds automatically.
-- **Priority-Based Job Scheduler** — A Redis-backed queue (lpush/rpush) distributes inference workloads across healthy nodes using greedy CPU load balancing. Full job lifecycle tracked: `queued → running → completed`.
-- **Autonomous Self-Healing** — Detects orphaned jobs on dead nodes and requeues them automatically. End-to-end recovery in under 30 seconds, no human intervention needed.
-- **Observability Stack** — Prometheus + Grafana scrape per-node metrics (CPU, latency, job throughput) every 15 seconds across the entire fleet.
-- **Live React Dashboard** — Real-time node health cards, CPU/latency time-series graphs, fleet health pie chart, priority job submission, and an activity log — auto-refreshing every 3 seconds.
+FleetOS is a production-style infrastructure platform that manages fleets of AI inference nodes at scale. It handles everything from node onboarding to failure recovery to auto-scaling — with no human intervention. It mirrors the kind of internal tooling AI teams build to manage large accelerator fleets.
 
 ---
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────┐
-│                  React Dashboard                │
-│   Health Cards │ Charts │ Job Submission │ Logs │
-└────────────────────────┬────────────────────────┘
-                         │
-┌────────────────────────▼────────────────────────┐
-│               Fleet Manager (API)               │
-│   Node Registry │ Heartbeat Monitor │ Scheduler │
-└──────┬──────────────────────────┬───────────────┘
-       │                          │
-┌──────▼──────┐          ┌────────▼────────┐
-│    Redis    │          │  Inference Nodes │
-│  Job Queue  │          │  (6x Docker)     │
-└─────────────┘          └─────────────────┘
-                         │
-              ┌──────────▼──────────┐
-              │ Prometheus + Grafana │
-              │  Metrics & Alerts    │
-              └─────────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│                        React Dashboard                       │
+│         (live fleet view, job submission, activity log)      │
+└────────────────────────────┬────────────────────────────────┘
+                             │ REST API (port 3000)
+          ┌──────────────────┼──────────────────┐
+          │                  │                  │
+          ▼                  ▼                  ▼
+   Registry Service   Scheduler Service   Docker Manager
+   (port 8000)        (port 8001)         (port 8002)
+          │                  │                  │
+          └──────────────────┼──────────────────┘
+                             │
+                         Redis Queue
+                             │
+          ┌──────────────────┼──────────────────┐
+          │                  │                  │
+          ▼                  ▼                  ▼
+      Healer            Autoscaler         Prometheus
+   (background)        (background)        (port 9090)
+                                               │
+                                           Grafana
+                                          (port 3001)
+                                               │
+                          ┌────────────────────┘
+                          │
+          ┌───────────────┼───────────────┐
+          ▼               ▼               ▼
+      node-001        node-002  ...   node-006
+   (Docker container, exposes metrics on port 910x)
 ```
+
+---
+
+## Services
+
+### Registry Service (`/registry-service`)
+The central source of truth for the fleet. Nodes self-register on boot and send heartbeats every 10 seconds. A background health check runs every 15 seconds — if a node exceeds the 30-second heartbeat threshold it's automatically marked dead.
+
+**Endpoints:**
+- `POST /register` — node self-registration on boot
+- `POST /heartbeat` — node health update every 10s
+- `GET /nodes` — all node statuses
+- `GET /fleet/summary` — fleet-wide health summary
+- `POST /fleet/clear-dead` — remove dead nodes from registry
+
+### Scheduler Service (`/scheduler-service`)
+Distributes inference jobs across healthy nodes using a weighted load balancing algorithm (70% CPU, 30% latency). Supports priority queuing — urgent jobs jump to the front of the Redis queue via `lpush`.
+
+**Endpoints:**
+- `POST /jobs/submit` — submit a new job (priority 1-3)
+- `GET /jobs` — all jobs and their statuses
+- `GET /queue/length` — current queue depth
+
+### Self-Healer (`/scheduler-service/healer.py`)
+A background service that scans for dead nodes every 15 seconds. When a dead node is detected, it finds all orphaned jobs (status `running`, assigned to dead node) and requeues them at the front of the Redis queue. End-to-end recovery happens in under 30 seconds.
+
+### Autoscaler (`/scheduler-service/autoscaler.py`)
+A background service that monitors fleet-wide avg CPU every 30 seconds and makes scaling decisions automatically:
+- avg CPU > 70% AND nodes < 6 → scale up (add node)
+- avg CPU < 30% AND nodes > 2 → scale down (remove least busy node)
+
+Includes a 60-second cooldown to prevent thrashing.
+
+### Docker Manager (`/docker-manager`)
+Manages the lifecycle of node containers dynamically. Handles spinning up new nodes, killing nodes, and restarting them. Syncs with existing Docker containers on startup to prevent conflicts after restarts.
+
+**Endpoints:**
+- `POST /nodes/add` — spin up a new node container
+- `POST /nodes/{id}/kill` — kill a node
+- `POST /nodes/{id}/restart` — restart a killed node
+- `POST /nodes/{id}/remove` — kill and fully remove a node
+
+### Node Agent (`/node-agent`)
+Runs inside each Docker container. On boot it self-registers with the registry, then enters a heartbeat loop — running a simulated inference workload (matrix multiplication) every 10 seconds and reporting CPU usage, latency, and job count. Exposes Prometheus metrics on a dedicated port.
+
+**Node lifecycle:** `starting → healthy → dead → recovering → healthy`
+
+### React Dashboard (`/dashboard`)
+A live fleet management UI with sidebar navigation. Auto-refreshes every 3 seconds.
+
+**Pages:**
+- **Overview** — fleet summary stats, health pie chart, activity log, node cards
+- **Nodes** — full node grid with kill/restart controls
+- **Jobs** — last 50 jobs with status, assigned node, and duration
+- **Metrics** — CPU and latency time-series graphs per node (Recharts)
 
 ---
 
@@ -50,72 +106,122 @@ FleetOS is a self-managing platform built to orchestrate a fleet of AI inference
 
 | Layer | Technology |
 |---|---|
-| Nodes | Docker (6 simulated inference nodes) |
-| Queue | Redis (lpush / rpush) |
-| Observability | Prometheus + Grafana |
-| Dashboard | React |
-| Scheduling | Greedy CPU load balancing |
+| Backend services | Python, FastAPI |
+| Job queue | Redis |
+| Node simulation | Docker containers |
+| Monitoring | Prometheus, Grafana |
+| Frontend | React, Recharts |
+| Container management | Docker SDK for Python |
 
 ---
 
 ## Getting Started
 
 ### Prerequisites
+- Python 3.11+
+- Docker Desktop
+- Node.js 18+
+- Redis (via Docker)
 
-- Docker & Docker Compose
-- Node.js (for the React dashboard)
-- Redis
-- Prometheus + Grafana
-
-### Running the Fleet
+### Install dependencies
 
 ```bash
-# Clone the repo
-git clone https://github.com/your-username/fleetos.git
-cd fleetos
+# Backend
+pip install fastapi uvicorn redis celery requests numpy prometheus-client docker grpcio grpcio-tools
 
-# Start all nodes and services
-docker-compose up --build
-
-# Start the dashboard
+# Frontend
 cd dashboard
 npm install
-npm start
 ```
 
-The dashboard will be available at `http://localhost:3000`.
+### Run Redis
+```bash
+docker run -p 6379:6379 redis
+```
+
+### Start all services (separate terminals)
+
+```bash
+# Registry
+cd registry-service && python registry.py
+
+# Scheduler
+cd scheduler-service && python scheduler.py
+
+# Healer
+cd scheduler-service && python healer.py
+
+# Autoscaler
+cd scheduler-service && python autoscaler.py
+
+# Docker Manager
+cd docker-manager && python manager.py
+
+# Dashboard
+cd dashboard && npm start
+```
+
+### Build the node Docker image
+```bash
+cd node-agent
+docker build -t fleetos-node .
+```
+
+### Add nodes
+Click **"+ Add Node"** on the dashboard, or call:
+```bash
+curl -X POST http://localhost:8002/nodes/add
+```
 
 ---
 
-## How It Works
+## Key Engineering Decisions
 
-### Node Registration
-Each inference node registers itself with the Fleet Manager on startup and sends periodic heartbeats. If a node misses heartbeats for 30 seconds, it is marked as dead.
+**Heartbeat-based failure detection** — nodes are declared dead by absence of signal, not an explicit death message. This catches crashes, network failures, and silent hangs.
 
-### Job Scheduling
-Jobs are submitted with a priority level and pushed into a Redis queue. The scheduler polls the queue and assigns jobs to the healthy node with the lowest current CPU load.
+**Separation of concerns** — registry, scheduler, healer, and autoscaler are independent services. Each has a single responsibility. The healer doesn't know how scheduling works; the scheduler doesn't know about healing.
 
-### Self-Healing
-A background service continuously monitors for orphaned jobs — jobs assigned to nodes that have since died. These jobs are automatically requeued and reassigned to a healthy node, achieving full recovery in under 30 seconds.
+**Redis list for priority queue** — `lpush` for urgent jobs (front), `rpush` for normal jobs (back). O(1) operations, no polling overhead.
 
-### Observability
-Prometheus scrapes CPU usage, inference latency, and job throughput from each node every 15 seconds. Grafana visualizes these metrics in real time.
+**Weighted load balancing** — node selection uses a scoring function: `score = 0.7 × CPU + 0.3 × latency`. A node with low CPU but high latency loses to one with slightly higher CPU but healthy latency — catching degraded nodes that appear fine on CPU alone.
 
----
+**Autoscaler cooldown** — a 60-second cooldown between scaling actions prevents thrashing (rapid oscillation between scale up and scale down).
 
-## Dashboard
-
-The React dashboard provides:
-- **Node Health Cards** — live status for each of the 6 nodes
-- **Time-Series Graphs** — CPU usage and latency per node
-- **Fleet Health Pie Chart** — healthy vs. dead node ratio
-- **Job Submission Panel** — submit jobs with custom priority levels
-- **Activity Log** — real-time narration of system events
-
-Auto-refreshes every **3 seconds**.
+**Docker sync on startup** — the manager syncs `active_nodes` with actually running Docker containers on boot, preventing name conflicts after restarts.
 
 ---
 
-## License
+## Monitoring
 
-MIT
+- **Prometheus** — `http://localhost:9090` — scrapes per-node metrics every 15s
+- **Grafana** — `http://localhost:3001` — CPU usage, inference latency, jobs processed dashboards
+- **Registry API** — `http://localhost:8000/fleet/summary` — live fleet summary
+- **Scheduler API** — `http://localhost:8001/docs` — interactive job submission
+
+---
+
+## Project Structure
+
+```
+Fleet-OS/
+├── registry-service/
+│   ├── registry.py
+│   └── Dockerfile
+├── scheduler-service/
+│   ├── scheduler.py
+│   ├── healer.py
+│   ├── autoscaler.py
+│   └── Dockerfile
+├── node-agent/
+│   ├── agent.py
+│   └── Dockerfile
+├── docker-manager/
+│   └── manager.py
+├── dashboard/
+│   └── src/
+│       ├── App.js
+│       └── App.css
+├── k8s/
+│   └── prometheus.yml
+└── render.yaml
+```
