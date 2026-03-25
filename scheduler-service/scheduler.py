@@ -49,10 +49,22 @@ def get_healthy_nodes():
         return []
 
 def pick_best_node(nodes):
-    """Pick the node with the lowest CPU usage — load balancing."""
+    """
+    Pick the best node using a weighted score of CPU and latency.
+    70% weight on CPU, 30% weight on latency.
+    Lower score = better node.
+    """
     if not nodes:
         return None
-    return min(nodes, key=lambda n: n.get("cpu", 100))
+
+    def score(node):
+        cpu_score = node.get("cpu", 100) / 100
+        latency_score = min(node.get("inference_latency_ms", 100) / 100, 1)
+        return (0.7 * cpu_score) + (0.3 * latency_score)
+
+    best = min(nodes, key=score)
+    print(f"[Scheduler] Load balancing scores: { {n['node_id']: round(score(n), 3) for n in nodes} }")
+    return best
 
 def save_job(job: dict):
     """Save job to Redis."""

@@ -85,6 +85,7 @@ function StatCard({ label, value, color, sub }) {
 function NodeCard({ node, onKill, onRestart, color }) {
   const isHealthy = node.status === 'healthy';
   const isDead = node.status === 'dead';
+  const isStarting = node.status === 'starting';
 
   return (
     <div style={{
@@ -95,7 +96,7 @@ function NodeCard({ node, onKill, onRestart, color }) {
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <div style={{
             width: '8px', height: '8px', borderRadius: '50%',
-            background: isHealthy ? '#10b981' : isDead ? '#f43f5e' : '#f59e0b',
+            background: isHealthy ? '#10b981' : isDead ? '#f43f5e' : isStarting ? '#6366f1' : '#f59e0b',
             animation: isHealthy ? 'pulse 2s infinite' : 'none',
             boxShadow: isHealthy ? '0 0 6px #10b981' : 'none'
           }} />
@@ -128,6 +129,12 @@ function NodeCard({ node, onKill, onRestart, color }) {
       {isDead && (
         <div style={{ color: '#f43f5e', fontSize: '12px', marginBottom: '14px', padding: '8px', background: '#1a0808', borderRadius: '8px' }}>
           ⚠ Heartbeat lost — self-healer active
+        </div>
+      )}
+
+      {isStarting && (
+        <div style={{ color: '#6366f1', fontSize: '12px', marginBottom: '14px', padding: '8px', background: '#0d0d2a', borderRadius: '8px' }}>
+          🔄 Node booting — waiting for first heartbeat...
         </div>
       )}
 
@@ -407,10 +414,10 @@ setNodes(fetchedNodes);
   }, []);
 
   const handleAddNode = async () => {
-    if (nodes.length >= MAX_NODES) {
+    if ((summary.healthy || 0) >= MAX_NODES) {
       addLog(`Maximum ${MAX_NODES} nodes reached`, '#f43f5e');
       return;
-    }
+  }
     setLoading('adding');
     try {
       const res = await axios.post(`${MANAGER_URL}/nodes/add`);
@@ -435,6 +442,14 @@ setNodes(fetchedNodes);
     }
   };
 
+  const handleClearDead = async () => {
+    try {
+        await axios.post(`${REGISTRY_URL}/fleet/clear-dead`);
+        addLog('🧹 Cleared all dead nodes from registry', '#a78bfa');
+    } catch {
+        addLog('Failed to clear dead nodes', '#f43f5e');
+    }
+  };
   const handleRestartNode = async (nodeId) => {
     try {
       await axios.post(`${MANAGER_URL}/nodes/${nodeId}/restart`);
@@ -492,6 +507,10 @@ setNodes(fetchedNodes);
               background: '#1a1208', border: '1px solid #f59e0b33', color: '#f59e0b',
               borderRadius: '7px', padding: '7px 16px', fontSize: '12px', cursor: 'pointer'
             }}>🚨 Urgent</button>
+            <button onClick={handleClearDead} style={{
+              background: '#1a0a2a', border: '1px solid #a78bfa33', color: '#a78bfa',
+              borderRadius: '7px', padding: '7px 16px', fontSize: '12px', cursor: 'pointer'
+            }}>🧹 Clear nodes</button>
           </div>
         </div>
 

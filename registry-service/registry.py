@@ -70,8 +70,9 @@ def get_all_nodes():
 def register_node(node: NodeRegistration):
     """Called by a node when it boots up."""
     data = node.dict()
+    data["status"] = "starting"  # NEW — node starts in 'starting' state
     save_node(node.node_id, data)
-    print(f"[Registry] Node registered: {node.node_id}")
+    print(f"[Registry] Node registered: {node.node_id} — status: starting")
     return {"message": f"{node.node_id} registered successfully"}
 
 @app.post("/heartbeat")
@@ -109,6 +110,18 @@ def fleet_summary():
         "avg_cpu": round(sum(n.get("cpu", 0) for n in healthy) / max(len(healthy), 1), 2),
         "avg_latency_ms": round(sum(n.get("inference_latency_ms", 0) for n in healthy) / max(len(healthy), 1), 2)
     }
+
+@app.post("/fleet/clear-dead")
+def clear_dead_nodes():
+    """Remove all dead nodes from the registry."""
+    nodes = get_all_nodes()
+    cleared = 0
+    for node in nodes:
+        if node.get("status") in ["dead", "recovering"]:
+            r.delete(f"node:{node['node_id']}")
+            cleared += 1
+    print(f"[Registry] Cleared {cleared} dead nodes from registry")
+    return {"message": f"Cleared {cleared} dead nodes"}
 
 # --- Dead Node Detection ---
 def health_check_loop():

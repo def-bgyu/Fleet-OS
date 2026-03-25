@@ -91,7 +91,7 @@ def kill_node(node_id: str):
     try:
         container = client.containers.get(f"fleetos-{node_id}")
         container.kill()
-        active_nodes[node_id]["status"] = "killed"
+        del active_nodes[node_id]
         print(f"[Manager] 💀 Killed {node_id}")
         return {"message": f"{node_id} killed successfully"}
     except Exception as e:
@@ -118,5 +118,28 @@ def list_managed_nodes():
     return {"nodes": active_nodes}
 
 if __name__ == "__main__":
+    # On startup, sync active_nodes with actually running Docker containers
+    print("[Manager] Syncing with existing Docker containers...")
+    try:
+        for container in client.containers.list():
+            if container.name.startswith("fleetos-node-"):
+                node_id = container.name.replace("fleetos-", "")
+                # Figure out which port it's using
+                ports = container.ports
+                port = 9110  # default
+                for container_port, host_bindings in ports.items():
+                    if host_bindings:
+                        port = int(host_bindings[0]['HostPort'])
+                        break
+                active_nodes[node_id] = {
+                    "container_id": container.id[:12],
+                    "port": port,
+                    "status": "running"
+                }
+                print(f"[Manager] Synced existing container: {node_id}")
+    except Exception as e:
+        print(f"[Manager] Sync error: {e}")
+
+    print(f"[Manager] Found {len(active_nodes)} existing nodes")
     print("[Manager] Starting FleetOS Docker Manager on port 8002...")
     uvicorn.run(app, host="0.0.0.0", port=8002)
