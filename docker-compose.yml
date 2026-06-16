@@ -1,0 +1,123 @@
+services:
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+
+  session-service:
+    build: ./session-service
+    restart: unless-stopped
+    ports:
+      - "8003:8003"
+    environment:
+      REDIS_URL: redis://redis:6379
+      ALLOWED_ORIGIN: ${ALLOWED_ORIGIN}
+      MAX_CONCURRENT_SESSIONS: ${MAX_CONCURRENT_SESSIONS}
+      MAX_NODES_PER_SESSION: ${MAX_NODES_PER_SESSION}
+      SESSION_IDLE_TIMEOUT: ${SESSION_IDLE_TIMEOUT}
+      MANAGER_URL: http://docker-manager:8002
+    depends_on:
+      - redis
+
+  registry-service:
+    build: ./registry-service
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      REDIS_URL: redis://redis:6379
+      ALLOWED_ORIGIN: ${ALLOWED_ORIGIN}
+    depends_on:
+      - redis
+
+  scheduler-service:
+    build: ./scheduler-service
+    restart: unless-stopped
+    ports:
+      - "8001:8001"
+    environment:
+      REDIS_URL: redis://redis:6379
+      REGISTRY_URL: http://registry-service:8000
+      ALLOWED_ORIGIN: ${ALLOWED_ORIGIN}
+    depends_on:
+      - redis
+      - registry-service
+
+  healer:
+    build: ./scheduler-service
+    restart: unless-stopped
+    command: python healer.py
+    environment:
+      REDIS_URL: redis://redis:6379
+      REGISTRY_URL: http://registry-service:8000
+      SCHEDULER_URL: http://scheduler-service:8001
+    depends_on:
+      - redis
+      - registry-service
+
+  autoscaler:
+    build: ./scheduler-service
+    restart: unless-stopped
+    command: python autoscaler.py
+    environment:
+      REDIS_URL: redis://redis:6379
+      REGISTRY_URL: http://registry-service:8000
+      MANAGER_URL: http://docker-manager:8002
+      MAX_NODES_PER_SESSION: ${MAX_NODES_PER_SESSION}
+    depends_on:
+      - redis
+      - registry-service
+      - docker-manager
+
+  docker-manager:
+    build: ./docker-manager
+    restart: unless-stopped
+    ports:
+      - "8002:8002"
+    environment:
+      REDIS_URL: redis://redis:6379
+      REGISTRY_URL: http://registry-service:8000
+      ALLOWED_ORIGIN: ${ALLOWED_ORIGIN}
+      MAX_NODES_PER_SESSION: ${MAX_NODES_PER_SESSION}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - redis
+      - registry-service
+
+  prometheus:
+    image: prom/prometheus:latest
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./k8s/prometheus.yml:/etc/prometheus/prometheus.yml
+
+  grafana:
+    image: grafana/grafana:latest
+    restart: unless-stopped
+    ports:
+      - "3001:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD}
+      GF_SERVER_ROOT_URL: ${GRAFANA_ROOT_URL}
+    volumes:
+      - grafana-storage:/var/lib/grafana
+    depends_on:
+      - prometheus
+
+  dashboard:
+    build: ./dashboard
+    restart: unless-stopped
+    ports:
+      - "3002:80"
+    environment:
+      REACT_APP_REGISTRY_URL: ${REACT_APP_REGISTRY_URL}
+      REACT_APP_SCHEDULER_URL: ${REACT_APP_SCHEDULER_URL}
+      REACT_APP_MANAGER_URL: ${REACT_APP_MANAGER_URL}
+      REACT_APP_SESSION_URL: ${REACT_APP_SESSION_URL}
+
+volumes:
+  grafana-storage:

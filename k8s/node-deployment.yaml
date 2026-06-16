@@ -1,0 +1,45 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fleetos-nodes
+  labels:
+    app: fleetos-node
+spec:
+  replicas: 3  # start with 3 nodes
+  selector:
+    matchLabels:
+      app: fleetos-node
+  template:
+    metadata:
+      labels:
+        app: fleetos-node
+    spec:
+      containers:
+        - name: fleetos-node
+          image: fleetos-node
+          imagePullPolicy: Never  # use local image, don't pull from registry
+          env:
+            - name: NODE_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name  # use pod name as node ID
+            - name: REGISTRY_URL
+              value: "http://host.docker.internal:8000"
+            - name: METRICS_PORT
+              value: "9100"
+          ports:
+            - containerPort: 9100
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: fleetos-nodes-service
+spec:
+  selector:
+    app: fleetos-node
+  ports:
+    - protocol: TCP
+      port: 9100
+      targetPort: 9100
+  type: ClusterIP
+  

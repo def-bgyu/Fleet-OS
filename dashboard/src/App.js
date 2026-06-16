@@ -1,19 +1,145 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts';
 import './App.css';
 
-const REGISTRY_URL = 'http://localhost:8000';
-const SCHEDULER_URL = 'http://localhost:8001';
-const MANAGER_URL = 'http://localhost:8002';
+const REGISTRY_URL = process.env.REACT_APP_REGISTRY_URL || 'http://localhost:8000';
+const SCHEDULER_URL = process.env.REACT_APP_SCHEDULER_URL || 'http://localhost:8001';
+const MANAGER_URL = process.env.REACT_APP_MANAGER_URL || 'http://localhost:8002';
+const SESSION_URL = process.env.REACT_APP_SESSION_URL || 'http://localhost:8003';
 const REFRESH_INTERVAL = 3000;
-const MAX_NODES = 6;
+const SESSION_HEARTBEAT_INTERVAL = 60000; // ping session service every 60s to stay alive
 const MAX_HISTORY = 20;
 
 const NODE_COLORS = ['#6366f1', '#22d3ee', '#f59e0b', '#10b981', '#f43f5e', '#a78bfa', '#34d399', '#fb923c'];
 
-// --- Sidebar ---
-function Sidebar({ active, setActive }) {
+// Axios instance that auto-attaches session token header
+function makeApi(sessionToken) {
+  return axios.create({
+    headers: { 'x-session-token': sessionToken }
+  });
+}
+
+// ============================================================
+// SESSION GATE — shown before a session is started
+// ============================================================
+function SessionGate({ onSessionStart }) {
+  const [sessionCount, setSessionCount] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    const fetchCount = async () => {
+      try {
+        const res = await axios.get(`${SESSION_URL}/sessions/count`);
+        setSessionCount(res.data);
+      } catch {
+        setSessionCount(null);
+      }
+    };
+    fetchCount();
+    const interval = setInterval(fetchCount, 5000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const handleStart = async () => {
+    setLoading(true);
+    setError('');
+    try {
+      const res = await axios.post(`${SESSION_URL}/sessions/create`);
+      const { session_id } = res.data;
+      sessionStorage.setItem('fleetos_session_id', session_id);
+      onSessionStart(session_id);
+    } catch (err) {
+      const msg = err.response?.data?.detail || 'Failed to start session';
+      setError(msg);
+    }
+    setLoading(false);
+  };
+
+  const slotsLeft = sessionCount ? sessionCount.slots_available : null;
+  const isFull = slotsLeft === 0;
+
+  return (
+    <div style={{
+      minHeight: '100vh', background: '#080810', display: 'flex',
+      alignItems: 'center', justifyContent: 'center', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
+    }}>
+      <div style={{
+        background: '#0c0c0f', border: '1px solid #1f1f2e', borderRadius: '16px',
+        padding: '48px', maxWidth: '440px', width: '100%', textAlign: 'center'
+      }}>
+        {/* Logo */}
+        <div style={{
+          width: '56px', height: '56px', background: 'linear-gradient(135deg, #6366f1, #22d3ee)',
+          borderRadius: '14px', display: 'flex', alignItems: 'center', justifyContent: 'center',
+          fontSize: '26px', margin: '0 auto 24px'
+        }}>⚡</div>
+
+        <div style={{ color: '#fff', fontSize: '22px', fontWeight: '700', marginBottom: '8px' }}>FleetOS</div>
+        <div style={{ color: '#444', fontSize: '13px', marginBottom: '32px' }}>
+          AI Inference Fleet Management
+        </div>
+
+        {/* Session count indicator */}
+        <div style={{
+          background: '#111118', border: '1px solid #1f1f2e', borderRadius: '10px',
+          padding: '14px 20px', marginBottom: '28px', display: 'flex',
+          justifyContent: 'space-between', alignItems: 'center'
+        }}>
+          <span style={{ color: '#555', fontSize: '12px' }}>Live sessions</span>
+          {sessionCount ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <div style={{ display: 'flex', gap: '4px' }}>
+                {Array.from({ length: sessionCount.max_sessions }).map((_, i) => (
+                  <div key={i} style={{
+                    width: '10px', height: '10px', borderRadius: '50%',
+                    background: i < sessionCount.active_sessions ? '#6366f1' : '#1f1f2e'
+                  }} />
+                ))}
+              </div>
+              <span style={{ color: isFull ? '#f43f5e' : '#888', fontSize: '12px' }}>
+                {sessionCount.active_sessions}/{sessionCount.max_sessions}
+              </span>
+            </div>
+          ) : (
+            <span style={{ color: '#333', fontSize: '12px' }}>checking...</span>
+          )}
+        </div>
+
+        {error && (
+          <div style={{
+            background: '#1a0808', border: '1px solid #f43f5e33', borderRadius: '8px',
+            padding: '10px 14px', marginBottom: '20px', color: '#f43f5e', fontSize: '12px'
+          }}>{error}</div>
+        )}
+
+        <button
+          onClick={handleStart}
+          disabled={loading || isFull}
+          style={{
+            width: '100%', padding: '14px', borderRadius: '10px', border: 'none',
+            background: isFull ? '#1a1a2e' : 'linear-gradient(135deg, #6366f1, #22d3ee)',
+            color: isFull ? '#333' : '#fff', fontSize: '14px', fontWeight: '600',
+            cursor: isFull ? 'not-allowed' : 'pointer', transition: 'opacity 0.2s',
+            opacity: loading ? 0.7 : 1
+          }}
+        >
+          {loading ? 'Starting session...' : isFull ? 'All sessions in use — try again later' : 'Start Session'}
+        </button>
+
+        <div style={{ color: '#2a2a3a', fontSize: '11px', marginTop: '20px', lineHeight: '1.6' }}>
+          Each session is isolated — up to 6 nodes, 10 min idle timeout.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// SIDEBAR
+// ============================================================
+function Sidebar({ active, setActive, onEndSession }) {
   const items = [
     { id: 'overview', icon: '◈', label: 'Overview' },
     { id: 'nodes', icon: '⬡', label: 'Nodes' },
@@ -26,13 +152,11 @@ function Sidebar({ active, setActive }) {
       borderRight: '1px solid #1f1f2e', padding: '0', flexShrink: 0,
       display: 'flex', flexDirection: 'column'
     }}>
-      {/* Logo */}
       <div style={{ padding: '24px 20px', borderBottom: '1px solid #1f1f2e' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
           <div style={{
             width: '32px', height: '32px', background: 'linear-gradient(135deg, #6366f1, #22d3ee)',
-            borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center',
-            fontSize: '16px'
+            borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '16px'
           }}>⚡</div>
           <div>
             <div style={{ color: '#fff', fontSize: '15px', fontWeight: '600' }}>FleetOS</div>
@@ -41,17 +165,14 @@ function Sidebar({ active, setActive }) {
         </div>
       </div>
 
-      {/* Nav */}
       <nav style={{ padding: '12px 10px', flex: 1 }}>
         {items.map(item => (
           <div key={item.id} onClick={() => setActive(item.id)} style={{
             display: 'flex', alignItems: 'center', gap: '10px',
-            padding: '10px 12px', borderRadius: '8px', cursor: 'pointer',
-            marginBottom: '2px',
+            padding: '10px 12px', borderRadius: '8px', cursor: 'pointer', marginBottom: '2px',
             background: active === item.id ? '#1a1a2e' : 'transparent',
             color: active === item.id ? '#6366f1' : '#555',
-            transition: 'all 0.15s ease',
-            fontSize: '13px'
+            transition: 'all 0.15s ease', fontSize: '13px'
           }}>
             <span style={{ fontSize: '16px' }}>{item.icon}</span>
             {item.label}
@@ -59,15 +180,20 @@ function Sidebar({ active, setActive }) {
         ))}
       </nav>
 
-      {/* Footer */}
-      <div style={{ padding: '16px 20px', borderTop: '1px solid #1f1f2e' }}>
-        <div style={{ color: '#333', fontSize: '10px' }}>AI Inference Fleet Management</div>
+      <div style={{ padding: '16px', borderTop: '1px solid #1f1f2e' }}>
+        <button onClick={onEndSession} style={{
+          width: '100%', background: 'transparent', border: '1px solid #2a1a1a',
+          color: '#f43f5e', borderRadius: '7px', padding: '8px', fontSize: '11px', cursor: 'pointer'
+        }}>End Session</button>
+        <div style={{ color: '#222', fontSize: '10px', marginTop: '10px' }}>AI Inference Fleet Management</div>
       </div>
     </div>
   );
 }
 
-// --- Stat Card ---
+// ============================================================
+// SHARED COMPONENTS (unchanged visually)
+// ============================================================
 function StatCard({ label, value, color, sub }) {
   return (
     <div style={{
@@ -81,15 +207,15 @@ function StatCard({ label, value, color, sub }) {
   );
 }
 
-// --- Node Card ---
-function NodeCard({ node, onKill, onRestart, color }) {
+function NodeCard({ node, onKill, onRestart, onRemove }) {
   const isHealthy = node.status === 'healthy';
   const isDead = node.status === 'dead';
   const isStarting = node.status === 'starting';
-
+  const isRecovering = node.status === 'recovering';
   return (
     <div style={{
-      background: '#0c0c0f', border: `1px solid ${isHealthy ? '#1f1f2e' : isDead ? '#3a1a1a' : '#2a2010'}`,
+      background: '#0c0c0f',
+      border: `1px solid ${isHealthy ? '#1f1f2e' : isDead ? '#3a1a1a' : '#2a2010'}`,
       borderRadius: '12px', padding: '18px', transition: 'all 0.2s ease'
     }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
@@ -128,13 +254,17 @@ function NodeCard({ node, onKill, onRestart, color }) {
 
       {isDead && (
         <div style={{ color: '#f43f5e', fontSize: '12px', marginBottom: '14px', padding: '8px', background: '#1a0808', borderRadius: '8px' }}>
-          ⚠ Heartbeat lost — self-healer active
+          Heartbeat lost — self-healer active
         </div>
       )}
-
+      {isRecovering && (
+        <div style={{ color: '#f59e0b', fontSize: '12px', marginBottom: '14px', padding: '8px', background: '#1a1208', borderRadius: '8px' }}>
+          Recovering — restart to bring back online or remove to free slot
+        </div>
+      )}
       {isStarting && (
         <div style={{ color: '#6366f1', fontSize: '12px', marginBottom: '14px', padding: '8px', background: '#0d0d2a', borderRadius: '8px' }}>
-          🔄 Node booting — waiting for first heartbeat...
+          Node booting — waiting for first heartbeat...
         </div>
       )}
 
@@ -142,23 +272,26 @@ function NodeCard({ node, onKill, onRestart, color }) {
         {isHealthy && (
           <button onClick={() => onKill(node.node_id)} style={{
             flex: 1, background: 'transparent', border: '1px solid #f43f5e33',
-            color: '#f43f5e', borderRadius: '6px', padding: '6px',
-            fontSize: '11px', cursor: 'pointer'
+            color: '#f43f5e', borderRadius: '6px', padding: '6px', fontSize: '11px', cursor: 'pointer'
           }}>Kill Node</button>
         )}
-        {!isHealthy && (
-          <button onClick={() => onRestart(node.node_id)} style={{
-            flex: 1, background: 'transparent', border: '1px solid #10b98133',
-            color: '#10b981', borderRadius: '6px', padding: '6px',
-            fontSize: '11px', cursor: 'pointer'
-          }}>Restart</button>
+        {(isDead || isRecovering) && (
+          <>
+            <button onClick={() => onRestart(node.node_id)} style={{
+              flex: 1, background: 'transparent', border: '1px solid #10b98133',
+              color: '#10b981', borderRadius: '6px', padding: '6px', fontSize: '11px', cursor: 'pointer'
+            }}>Restart</button>
+            <button onClick={() => onRemove(node.node_id)} style={{
+              flex: 1, background: 'transparent', border: '1px solid #f59e0b33',
+              color: '#f59e0b', borderRadius: '6px', padding: '6px', fontSize: '11px', cursor: 'pointer'
+            }}>Remove</button>
+          </>
         )}
       </div>
     </div>
   );
 }
 
-// --- Activity Log ---
 function ActivityLog({ logs }) {
   const bottomRef = useRef(null);
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [logs]);
@@ -181,21 +314,21 @@ function ActivityLog({ logs }) {
   );
 }
 
-// --- Overview Page ---
-function OverviewPage({ summary, queueLength, logs, nodes, onKill, onRestart }) {
+// ============================================================
+// PAGES
+// ============================================================
+function OverviewPage({ summary, queueLength, logs, nodes, onKill, onRestart, onRemove, maxNodes }) {
   const pieData = [
     { name: 'Healthy', value: summary.healthy || 0 },
     { name: 'Dead', value: summary.dead || 0 },
     { name: 'Recovering', value: (summary.total_nodes || 0) - (summary.healthy || 0) - (summary.dead || 0) }
   ].filter(d => d.value > 0);
-
   const PIE_COLORS = ['#10b981', '#f43f5e', '#f59e0b'];
 
   return (
     <div>
-      {/* Stats Row */}
       <div style={{ display: 'flex', gap: '12px', marginBottom: '24px', flexWrap: 'wrap' }}>
-        <StatCard label="Total Nodes" value={summary.total_nodes || 0} color="#fff" sub={`${MAX_NODES} max`} />
+        <StatCard label="Total Nodes" value={summary.total_nodes || 0} color="#fff" sub={`${maxNodes} max`} />
         <StatCard label="Healthy" value={summary.healthy || 0} color="#10b981" />
         <StatCard label="Dead" value={summary.dead || 0} color="#f43f5e" />
         <StatCard label="Avg CPU" value={`${summary.avg_cpu || 0}%`} color="#6366f1" />
@@ -204,7 +337,6 @@ function OverviewPage({ summary, queueLength, logs, nodes, onKill, onRestart }) 
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '24px' }}>
-        {/* Pie Chart */}
         <div style={{ background: '#0c0c0f', border: '1px solid #1f1f2e', borderRadius: '12px', padding: '20px' }}>
           <div style={{ color: '#888', fontSize: '11px', marginBottom: '16px', textTransform: 'uppercase', letterSpacing: '1px' }}>Fleet Health</div>
           {pieData.length > 0 ? (
@@ -220,20 +352,18 @@ function OverviewPage({ summary, queueLength, logs, nodes, onKill, onRestart }) 
           ) : <div style={{ color: '#222', fontSize: '12px', textAlign: 'center', paddingTop: '60px' }}>No nodes yet</div>}
         </div>
 
-        {/* Activity Log */}
         <div style={{ background: '#0c0c0f', border: '1px solid #1f1f2e', borderRadius: '12px', padding: '20px' }}>
           <div style={{ color: '#888', fontSize: '11px', marginBottom: '16px', textTransform: 'uppercase', letterSpacing: '1px' }}>Activity Log</div>
           <ActivityLog logs={logs} />
         </div>
       </div>
 
-      {/* Node Grid Preview */}
       <div style={{ background: '#0c0c0f', border: '1px solid #1f1f2e', borderRadius: '12px', padding: '20px' }}>
         <div style={{ color: '#888', fontSize: '11px', marginBottom: '16px', textTransform: 'uppercase', letterSpacing: '1px' }}>Fleet Nodes</div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '12px' }}>
           {nodes.length === 0
-            ? <div style={{ color: '#222', fontSize: '12px' }}>No nodes registered — add one to get started</div>
-            : nodes.map((node, i) => <NodeCard key={node.node_id} node={node} onKill={onKill} onRestart={onRestart} color={NODE_COLORS[i % NODE_COLORS.length]} />)
+            ? <div style={{ color: '#222', fontSize: '12px' }}>No nodes — click "+ Add Node" to get started</div>
+            : nodes.map((node) => <NodeCard key={node.node_id} node={node} onKill={onKill} onRestart={onRestart} onRemove={onRemove} />)
           }
         </div>
       </div>
@@ -241,12 +371,9 @@ function OverviewPage({ summary, queueLength, logs, nodes, onKill, onRestart }) 
   );
 }
 
-// --- Metrics Page ---
 function MetricsPage({ cpuHistory, latencyHistory }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-
-      {/* CPU Chart */}
       <div style={{ background: '#0c0c0f', border: '1px solid #1f1f2e', borderRadius: '12px', padding: '24px' }}>
         <div style={{ color: '#888', fontSize: '11px', marginBottom: '20px', textTransform: 'uppercase', letterSpacing: '1px' }}>CPU Usage Over Time (%)</div>
         {cpuHistory.length > 0 ? (
@@ -264,7 +391,6 @@ function MetricsPage({ cpuHistory, latencyHistory }) {
         ) : <div style={{ color: '#222', fontSize: '12px', textAlign: 'center', paddingTop: '80px' }}>Waiting for data...</div>}
       </div>
 
-      {/* Latency Chart */}
       <div style={{ background: '#0c0c0f', border: '1px solid #1f1f2e', borderRadius: '12px', padding: '24px' }}>
         <div style={{ color: '#888', fontSize: '11px', marginBottom: '20px', textTransform: 'uppercase', letterSpacing: '1px' }}>Inference Latency Over Time (ms)</div>
         {latencyHistory.length > 0 ? (
@@ -285,7 +411,6 @@ function MetricsPage({ cpuHistory, latencyHistory }) {
   );
 }
 
-// --- Jobs Page ---
 function JobsPage({ jobs }) {
   const statusColor = { queued: '#f59e0b', running: '#6366f1', completed: '#10b981' };
   const statusIcon = { queued: '⏳', running: '⚡', completed: '✅' };
@@ -296,7 +421,6 @@ function JobsPage({ jobs }) {
       <div style={{ color: '#d8d8d8', fontSize: '15px', marginBottom: '20px', textTransform: 'uppercase', letterSpacing: '1px' }}>
         All Jobs ({jobs.length})
       </div>
-      {/* Header */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr 1fr', gap: '12px', padding: '8px 12px', marginBottom: '8px' }}>
         {['Job ID', 'Type', 'Status', 'Node', 'Duration'].map(h => (
           <div key={h} style={{ color: '#f3f3f3', fontSize: '14px', textTransform: 'uppercase', letterSpacing: '1px' }}>{h}</div>
@@ -314,35 +438,35 @@ function JobsPage({ jobs }) {
           <span style={{ color: '#555' }}>{job.assigned_node || '—'}</span>
           <span style={{ color: '#333' }}>
             {job.completed_at && job.started_at
-              ? `${((job.completed_at - job.started_at)).toFixed(1)}s`
+              ? `${(job.completed_at - job.started_at).toFixed(1)}s`
               : job.started_at ? 'running...' : '—'}
           </span>
         </div>
       ))}
-      {jobs.length === 0 && <div style={{ color: '#e28f8f', fontSize: '12px' }}>No jobs yet</div>}
+      {jobs.length === 0 && <div style={{ color: '#888', fontSize: '12px' }}>No jobs yet — submit one above</div>}
     </div>
   );
 }
 
-// --- Nodes Page ---
-function NodesPage({ nodes, onKill, onRestart }) {
+function NodesPage({ nodes, onKill, onRestart, onRemove }) {
   return (
-    <div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '14px' }}>
-        {nodes.length === 0
-          ? <div style={{ color: '#222', fontSize: '12px' }}>No nodes registered yet</div>
-          : nodes.map((node, i) => (
-            <NodeCard key={node.node_id} node={node} onKill={onKill} onRestart={onRestart}
-              color={NODE_COLORS[i % NODE_COLORS.length]} />
-          ))
-        }
-      </div>
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '14px' }}>
+      {nodes.length === 0
+        ? <div style={{ color: '#222', fontSize: '12px' }}>No nodes registered yet</div>
+        : nodes.map((node) => (
+          <NodeCard key={node.node_id} node={node} onKill={onKill} onRestart={onRestart} onRemove={onRemove} />
+        ))
+      }
     </div>
   );
 }
 
-// --- Main App ---
-export default function App() {
+// ============================================================
+// MAIN APP (rendered after session is established)
+// ============================================================
+function FleetDashboard({ sessionId, onEndSession }) {
+  const api = useCallback(() => makeApi(sessionId), [sessionId]);
+
   const [activePage, setActivePage] = useState('overview');
   const [nodes, setNodes] = useState([]);
   const [jobs, setJobs] = useState([]);
@@ -353,45 +477,44 @@ export default function App() {
   const [latencyHistory, setLatencyHistory] = useState([]);
   const [lastUpdated, setLastUpdated] = useState(null);
   const [loading, setLoading] = useState('');
+  const [nodeCount, setNodeCount] = useState(0);
+  const MAX_NODES = 6;
 
   const addLog = (message, color = '#555') => {
     const time = new Date().toLocaleTimeString();
     setLogs(prev => [...prev.slice(-50), { time, message, color }]);
   };
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
+    const client = api();
     try {
       const [nodesRes, jobsRes, queueRes, summaryRes] = await Promise.all([
-        axios.get(`${REGISTRY_URL}/nodes`),
-        axios.get(`${SCHEDULER_URL}/jobs`),
-        axios.get(`${SCHEDULER_URL}/queue/length`),
-        axios.get(`${REGISTRY_URL}/fleet/summary`)
+        client.get(`${REGISTRY_URL}/nodes`),
+        client.get(`${SCHEDULER_URL}/jobs`),
+        client.get(`${SCHEDULER_URL}/queue/length`),
+        client.get(`${REGISTRY_URL}/fleet/summary`)
       ]);
 
       const fetchedNodes = nodesRes.data.nodes || [];
       const fetchedJobs = jobsRes.data.jobs || [];
 
-// Detect job status changes for activity log
       setJobs(prev => {
         fetchedJobs.forEach(job => {
-        const prevJob = prev.find(j => j.job_id === job.job_id);
-        if (prevJob?.status === 'queued' && job.status === 'running') {
-          addLog(`⚡ Job ${job.job_id} → assigned to ${job.assigned_node}`, '#6366f1');
-        }
-        if (prevJob?.status === 'running' && job.status === 'completed') {
-          addLog(`✅ Job ${job.job_id} completed on ${job.assigned_node}`, '#10b981');
-        }
+          const prevJob = prev.find(j => j.job_id === job.job_id);
+          if (prevJob?.status === 'queued' && job.status === 'running')
+            addLog(`⚡ Job ${job.job_id} → assigned to ${job.assigned_node}`, '#6366f1');
+          if (prevJob?.status === 'running' && job.status === 'completed')
+            addLog(`✅ Job ${job.job_id} completed on ${job.assigned_node}`, '#10b981');
+        });
+        return fetchedJobs;
       });
-      return fetchedJobs;
-    });
 
-setNodes(fetchedNodes);
-
+      setNodes(fetchedNodes);
+      setNodeCount(fetchedNodes.length);
       setQueueLength(queueRes.data.jobs_waiting || 0);
       setSummary(summaryRes.data || {});
       setLastUpdated(new Date().toLocaleTimeString());
 
-      // Update history for charts
       const time = new Date().toLocaleTimeString();
       const cpuPoint = { time };
       const latencyPoint = { time };
@@ -403,38 +526,70 @@ setNodes(fetchedNodes);
       setLatencyHistory(prev => [...prev.slice(-MAX_HISTORY), latencyPoint]);
 
     } catch (err) {
-      console.error('Fetch error:', err);
+      if (err.response?.status === 403) {
+        addLog('Session expired — please start a new session', '#f43f5e');
+        onEndSession();
+      }
     }
-  };
+  }, [api, onEndSession]);
 
+  // Data polling
   useEffect(() => {
     fetchData();
     const interval = setInterval(fetchData, REFRESH_INTERVAL);
     return () => clearInterval(interval);
-  }, []);
+  }, [fetchData]);
+
+  // Session keepalive
+  useEffect(() => {
+    const interval = setInterval(async () => {
+      try {
+        await axios.post(
+          `${SESSION_URL}/sessions/${sessionId}/heartbeat`,
+          {},
+          { headers: { 'x-session-token': sessionId } }
+        );
+      } catch {
+        // session expired — handled by fetchData 403
+      }
+    }, SESSION_HEARTBEAT_INTERVAL);
+    return () => clearInterval(interval);
+  }, [sessionId]);
+
+  const handleEndSession = async () => {
+    try {
+      await axios.post(
+        `${SESSION_URL}/sessions/${sessionId}/end`,
+        {},
+        { headers: { 'x-session-token': sessionId } }
+      );
+    } catch { /* ignore */ }
+    sessionStorage.removeItem('fleetos_session_id');
+    onEndSession();
+  };
 
   const handleAddNode = async () => {
-    if ((summary.healthy || 0) >= MAX_NODES) {
-      addLog(`Maximum ${MAX_NODES} nodes reached`, '#f43f5e');
+    if (nodeCount >= MAX_NODES) {
+      addLog(`Maximum ${MAX_NODES} nodes reached — kill one first`, '#f43f5e');
       return;
-  }
+    }
     setLoading('adding');
     try {
-      const res = await axios.post(`${MANAGER_URL}/nodes/add`);
+      const res = await api().post(`${MANAGER_URL}/nodes/add`);
       if (res.data.error) {
         addLog(`Failed to add node: ${res.data.error}`, '#f43f5e');
       } else {
         addLog(`✅ ${res.data.node_id} joined the fleet`, '#10b981');
       }
     } catch (err) {
-      addLog('Failed to add node', '#f43f5e');
+      addLog(err.response?.data?.detail || 'Failed to add node', '#f43f5e');
     }
     setLoading('');
   };
 
   const handleKillNode = async (nodeId) => {
     try {
-      await axios.post(`${MANAGER_URL}/nodes/${nodeId}/kill`);
+      await api().post(`${MANAGER_URL}/nodes/${nodeId}/kill`);
       addLog(`💀 ${nodeId} killed`, '#f43f5e');
       setTimeout(() => addLog(`🔍 Self-healer scanning ${nodeId} for orphaned jobs...`, '#f59e0b'), 5000);
     } catch {
@@ -442,26 +597,36 @@ setNodes(fetchedNodes);
     }
   };
 
-  const handleClearDead = async () => {
-    try {
-        await axios.post(`${REGISTRY_URL}/fleet/clear-dead`);
-        addLog('🧹 Cleared all dead nodes from registry', '#a78bfa');
-    } catch {
-        addLog('Failed to clear dead nodes', '#f43f5e');
-    }
-  };
   const handleRestartNode = async (nodeId) => {
     try {
-      await axios.post(`${MANAGER_URL}/nodes/${nodeId}/restart`);
+      await api().post(`${MANAGER_URL}/nodes/${nodeId}/restart`);
       addLog(`🟢 ${nodeId} restarting...`, '#10b981');
     } catch {
       addLog(`Failed to restart ${nodeId}`, '#f43f5e');
     }
   };
 
+  const handleRemoveNode = async (nodeId) => {
+    try {
+      await api().post(`${MANAGER_URL}/nodes/${nodeId}/remove`);
+      addLog(`🗑 ${nodeId} removed — slot freed`, '#a78bfa');
+    } catch {
+      addLog(`Failed to remove ${nodeId}`, '#f43f5e');
+    }
+  };
+
+  const handleClearDead = async () => {
+    try {
+      await api().post(`${REGISTRY_URL}/fleet/clear-dead`);
+      addLog('🧹 Cleared all dead nodes from registry', '#a78bfa');
+    } catch {
+      addLog('Failed to clear dead nodes', '#f43f5e');
+    }
+  };
+
   const handleSubmitJob = async (priority = 1) => {
     try {
-      const res = await axios.post(`${SCHEDULER_URL}/jobs/submit`, {
+      const res = await api().post(`${SCHEDULER_URL}/jobs/submit`, {
         job_type: 'inference', priority, payload: {}
       });
       addLog(
@@ -480,22 +645,24 @@ setNodes(fetchedNodes);
 
   return (
     <div style={{ display: 'flex', minHeight: '100vh', background: '#080810', color: '#fff', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif' }}>
-      <Sidebar active={activePage} setActive={setActivePage} />
+      <Sidebar active={activePage} setActive={setActivePage} onEndSession={handleEndSession} />
 
-      {/* Main content */}
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-
-        {/* Top bar */}
         <div style={{
           height: '60px', borderBottom: '1px solid #1f1f2e', display: 'flex',
           alignItems: 'center', justifyContent: 'space-between', padding: '0 24px',
           background: '#0c0c0f', flexShrink: 0
         }}>
-          <div style={{ color: '#ddd2d2', fontSize: '12px' }}>Updated {lastUpdated}</div>
+          <div style={{ color: '#333', fontSize: '11px', fontFamily: 'monospace' }}>
+            session: {sessionId.slice(0, 8)}... &nbsp;|&nbsp; updated {lastUpdated} &nbsp;|&nbsp;
+            <span style={{ color: nodeCount >= MAX_NODES ? '#f43f5e' : '#444' }}>
+              nodes: {nodeCount}/{MAX_NODES}
+            </span>
+          </div>
           <div style={{ display: 'flex', gap: '10px' }}>
-            <button onClick={handleAddNode} disabled={loading === 'adding'} style={{
-              background: '#0d2818', border: '1px solid #10b98133', color: '#10b981',
-              borderRadius: '7px', padding: '7px 16px', fontSize: '12px', cursor: 'pointer'
+            <button onClick={handleAddNode} disabled={loading === 'adding' || nodeCount >= MAX_NODES} style={{
+              background: '#0d2818', border: '1px solid #10b98133', color: nodeCount >= MAX_NODES ? '#333' : '#10b981',
+              borderRadius: '7px', padding: '7px 16px', fontSize: '12px', cursor: nodeCount >= MAX_NODES ? 'not-allowed' : 'pointer'
             }}>
               {loading === 'adding' ? 'Starting...' : '+ Add Node'}
             </button>
@@ -510,11 +677,10 @@ setNodes(fetchedNodes);
             <button onClick={handleClearDead} style={{
               background: '#1a0a2a', border: '1px solid #a78bfa33', color: '#a78bfa',
               borderRadius: '7px', padding: '7px 16px', fontSize: '12px', cursor: 'pointer'
-            }}>🧹 Clear nodes</button>
+            }}>🧹 Clear Dead</button>
           </div>
         </div>
 
-        {/* Page content */}
         <div style={{ flex: 1, overflowY: 'auto', padding: '24px' }}>
           <PageComponent
             summary={summary}
@@ -524,11 +690,31 @@ setNodes(fetchedNodes);
             jobs={jobs}
             onKill={handleKillNode}
             onRestart={handleRestartNode}
+            onRemove={handleRemoveNode}
             cpuHistory={cpuHistory}
             latencyHistory={latencyHistory}
+            maxNodes={MAX_NODES}
           />
         </div>
       </div>
     </div>
   );
+}
+
+// ============================================================
+// ROOT — session gate or dashboard
+// ============================================================
+export default function App() {
+  const [sessionId, setSessionId] = useState(() => {
+    return sessionStorage.getItem('fleetos_session_id') || null;
+  });
+
+  const handleSessionStart = (id) => setSessionId(id);
+  const handleEndSession = () => setSessionId(null);
+
+  if (!sessionId) {
+    return <SessionGate onSessionStart={handleSessionStart} />;
+  }
+
+  return <FleetDashboard sessionId={sessionId} onEndSession={handleEndSession} />;
 }
