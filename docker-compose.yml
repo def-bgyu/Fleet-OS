@@ -109,15 +109,16 @@ services:
       - prometheus
 
   dashboard:
-    build: ./dashboard
+    build:
+      context: ./dashboard
+      args:
+        REACT_APP_REGISTRY_URL: ${REACT_APP_REGISTRY_URL}
+        REACT_APP_SCHEDULER_URL: ${REACT_APP_SCHEDULER_URL}
+        REACT_APP_MANAGER_URL: ${REACT_APP_MANAGER_URL}
+        REACT_APP_SESSION_URL: ${REACT_APP_SESSION_URL}
     restart: unless-stopped
     ports:
       - "3002:80"
-    environment:
-      REACT_APP_REGISTRY_URL: ${REACT_APP_REGISTRY_URL}
-      REACT_APP_SCHEDULER_URL: ${REACT_APP_SCHEDULER_URL}
-      REACT_APP_MANAGER_URL: ${REACT_APP_MANAGER_URL}
-      REACT_APP_SESSION_URL: ${REACT_APP_SESSION_URL}
 
 volumes:
   grafana-storage:
