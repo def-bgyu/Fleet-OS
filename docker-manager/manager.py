@@ -44,11 +44,21 @@ app.add_middleware(
 # session_id -> { node_id -> { container_id, port, status } }
 # Backed by Redis so manager restarts don't lose state
 def load_active_nodes() -> dict:
-    raw = r.get("manager:active_nodes")
-    return json.loads(raw) if raw else {}
+    for attempt in range(10):
+        try:
+            raw = r.get("manager:active_nodes")
+            return json.loads(raw) if raw else {}
+        except Exception as e:
+            print(f"[Manager] Redis not ready, retrying ({attempt+1}/10)... {e}")
+            time.sleep(3)
+    print("[Manager] Could not connect to Redis after retries — starting with empty state")
+    return {}
 
 def persist_active_nodes():
-    r.set("manager:active_nodes", json.dumps(active_nodes))
+    try:
+        r.set("manager:active_nodes", json.dumps(active_nodes))
+    except Exception as e:
+        print(f"[Manager] Could not persist active_nodes: {e}")
 
 active_nodes: dict = load_active_nodes()
 
